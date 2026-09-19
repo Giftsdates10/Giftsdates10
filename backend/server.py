@@ -1768,7 +1768,7 @@ async def respond_date(bid: str, accept: bool, selected_activity: Optional[str] 
 
 @api.get("/profiles/{pid}/availability")
 async def profile_availability(pid: str, user=Depends(get_current_user)):
-    p = await db.users.find_one({"id": pid}, {"_id": 0, "availability": 1, "availability_time": 1, "availability_slots": 1})
+    p = await db.users.find_one({"id": pid}, {"_id": 0, "availability": 1, "availability_time": 1, "availability_slots": 1, "locked_slots": 1})
     if not p: raise HTTPException(404, "Not found")
     busy = await db.date_bookings.find({"status": {"$in": ["escrow", "accepted", "confirmed"]}, "$or": [{"to_id": pid}, {"from_id": pid}]},
                                        {"_id": 0, "scheduled_at": 1, "slot_from": 1, "slot_to": 1, "local_time": 1}).to_list(500)
@@ -1782,6 +1782,17 @@ async def profile_availability(pid: str, user=Depends(get_current_user)):
         busy_slots.setdefault(d, []).append({
             "from": _min_to_hm(bs), "to": _min_to_hm(be),
             "lock_from": _min_to_hm(max(0, bs - DATE_BUFFER)), "lock_to": _min_to_hm(be + DATE_BUFFER)})
+    # locked slots (e.g. a date the person previously rejected) — permanently unavailable
+    locked_days = {}
+    for ls in (p.get("locked_slots") or []):
+        s_dt, e_dt = _pdt(ls.get("start")), _pdt(ls.get("end"))
+        if not s_dt: continue
+        d = ls.get("date") or s_dt.strftime("%Y-%m-%d")
+        sf = s_dt.hour * 60 + s_dt.minute
+        et = (e_dt.hour * 60 + e_dt.minute) if e_dt else sf + DATE_SLOT_MINUTES
+        block = {"from": _min_to_hm(sf), "to": _min_to_hm(et), "lock_from": _min_to_hm(sf), "lock_to": _min_to_hm(et), "locked": True}
+        busy_slots.setdefault(d, []).append(block)
+        locked_days.setdefault(d, []).append(block)
     # a day is fully booked only when every generated slot is taken (incl. buffer)
     fully_booked = []
     for d, taken in busy_slots.items():
@@ -1793,7 +1804,7 @@ async def profile_availability(pid: str, user=Depends(get_current_user)):
         if all_slots and all(_overlaps(s) for s in all_slots):
             fully_booked.append(d)
     return {"available_days": p.get("availability") or [], "busy_days": sorted(fully_booked),
-            "time_window": time_window, "slots": day_slots,
+            "time_window": time_window, "slots": day_slots, "locked_days": locked_days,
             "busy_slots": busy_slots, "slot_hours": DATE_SLOT_HOURS, "buffer": DATE_BUFFER}
 
 @api.get("/dates")
@@ -3246,6 +3257,7 @@ def _serialize(d, viewer_id, other_mini):
             "next_step": step, "other": other_mini, "options": d.get("options"), "chosen_idea": d.get("chosen_idea"),
             "selected_activity": d.get("selected_activity") or (d.get("chosen_idea") or {}).get("name"),
             "activity_option_1": d.get("activity_option_1"), "activity_option_2": d.get("activity_option_2"), "activity_option_3": d.get("activity_option_3"),
+            "proposed_start": d.get("proposed_start"), "proposed_end": d.get("proposed_end"),
             "coins": d.get("coins"), "total_hold": d.get("total_hold"), "gift": d.get("gift"),
             "location": loc, "transportation": trans, "report": bool(d.get("report")),
             "verification": (d.get("verification") or {}).get("status"), "windows": windows,
@@ -3256,6 +3268,7 @@ class InviteCreateReq(BaseModel):
     activity_option_1: str
     activity_option_2: str
     activity_option_3: str
+    scheduled_start: str  # ISO day+time the inviter picks from the recipient's availability
     coins: int
     gift_id: Optional[str] = None
     safety_ack: bool = False
@@ -3282,16 +3295,39 @@ class InviteReportReq(BaseModel):
 class DateMsgReq(BaseModel):
     text: str
 
+async def _recipient_slot_or_400(rec, start_dt):
+    """Validate start_dt is a bookable 2.5h slot inside the recipient's availability and
+    not already busy or locked. Returns (start_iso, end_iso) for the full 3h locked block."""
+    if not start_dt: raise HTTPException(400, "Invalid start time")
+    day = start_dt.strftime("%Y-%m-%d")
+    avail_days = rec.get("availability") or []
+    if avail_days and day not in avail_days: raise HTTPException(400, "DAY_UNAVAILABLE")
+    win = (rec.get("availability_slots") or {}).get(day) or rec.get("availability_time")
+    start_min = start_dt.hour * 60 + start_dt.minute
+    date_end_min = start_min + DATE_SLOT_MINUTES  # 2.5h date must fit in the window
+    if win and not (_hm_to_min(win["from"]) <= start_min and date_end_min <= _hm_to_min(win["to"])):
+        raise HTTPException(400, f"TIME_UNAVAILABLE:{win['from']}-{win['to']}")
+    block_end = start_dt + timedelta(hours=DATE_WINDOW_HOURS)
+    for ls in (rec.get("locked_slots") or []):
+        ls_s, ls_e = _pdt(ls.get("start")), _pdt(ls.get("end"))
+        if ls_s and ls_e and start_dt < ls_e and ls_s < block_end:
+            raise HTTPException(400, "SLOT_LOCKED")
+    if await _conflict(rec["id"], start_dt, block_end, "___new___"):
+        raise HTTPException(400, "TIME_CONFLICT")
+    return _iso(start_dt), _iso(block_end)
+
 @api.post("/invites")
 async def create_invite(req: InviteCreateReq, user=Depends(get_current_user)):
     if req.recipient_id == user["id"]: raise HTTPException(400, "Cannot invite yourself")
     if not req.safety_ack: raise HTTPException(400, "SAFETY_ACK_REQUIRED")
-    rec = await db.users.find_one({"id": req.recipient_id}, {"_id": 0, "id": 1, "name": 1, "date_price": 1})
+    rec = await db.users.find_one({"id": req.recipient_id}, {"_id": 0, "id": 1, "name": 1, "date_price": 1, "availability": 1, "availability_time": 1, "availability_slots": 1, "locked_slots": 1})
     if not rec: raise HTTPException(404, "Recipient not found")
     # 3 mandatory custom date-idea options typed by the inviter (no predefined catalog)
     opts_text = [(req.activity_option_1 or "").strip(), (req.activity_option_2 or "").strip(), (req.activity_option_3 or "").strip()]
     if any(not o for o in opts_text): raise HTTPException(400, "ACTIVITIES_REQUIRED")
     opts_text = [o[:120] for o in opts_text]
+    # inviter picks a specific day + time from the recipient's availability
+    proposed_start, proposed_end = await _recipient_slot_or_400(rec, _pdt(req.scheduled_start))
     floor = max(INVITE_MIN_COINS, int(rec.get("date_price") or 0))
     if req.coins < floor: raise HTTPException(400, f"MIN_COINS:{floor}")
     if ((user.get("coins") or 0) + (user.get("withdrawable") or 0)) < req.coins: raise HTTPException(400, "Insufficient coins")
@@ -3310,6 +3346,7 @@ async def create_invite(req: InviteCreateReq, user=Depends(get_current_user)):
     did = str(uuid.uuid4())
     doc = {"id": did, "inviter_id": user["id"], "recipient_id": req.recipient_id, "options": options,
            "activity_option_1": opts_text[0], "activity_option_2": opts_text[1], "activity_option_3": opts_text[2],
+           "proposed_start": proposed_start, "proposed_end": proposed_end,
            "chosen_idea": None, "selected_activity": None, "coins": req.coins, "total_hold": req.coins, "gift": gift,
            "location": None, "transportation": None, "status": "INVITATION_SENT",
            "status_log": [{"status": "INVITATION_SENT", "at": _iso(), "by": user["id"]}], "report": None,
@@ -3317,7 +3354,7 @@ async def create_invite(req: InviteCreateReq, user=Depends(get_current_user)):
            "created_at": _iso(), "updated_at": _iso(), "expires_at": _iso(_now() + timedelta(days=7))}
     await db.dates.insert_one(doc)
     await notify(req.recipient_id, "date_request", "You received a new date invitation",
-                 f"{user['name']} invited you on a date with {len(options)} option(s). Choose one to continue.",
+                 f"{user['name']} invited you on a date ({proposed_start[:16].replace('T', ' ')}) with {len(options)} option(s). Choose one to confirm, or reject.",
                  {"date_id": did}, email=True, link=DATES_LINK, cta="View Invitation")
     return {"id": did, "status": "INVITATION_SENT"}
 
@@ -3345,9 +3382,10 @@ async def invite_choose(did: str, req: ChooseIdeaReq, user=Depends(get_current_u
 async def invite_location(did: str, req: InviteLocationReq, user=Depends(get_current_user)):
     d = await _get_party(did, user["id"], "inviter")
     if d["status"] not in ("DATE_ACTIVITY_SELECTED", "LOCATION_PROPOSED"): raise HTTPException(400, "Cannot set location now")
-    start = _pdt(req.scheduled_start)
+    # date & time were fixed upfront at invitation; the inviter only adds the venue here
+    start = _pdt(d.get("proposed_start") or req.scheduled_start)
     if not start: raise HTTPException(400, "Invalid start time")
-    end = start + timedelta(hours=DATE_WINDOW_HOURS)
+    end = _pdt(d.get("proposed_end")) or (start + timedelta(hours=DATE_WINDOW_HOURS))
     if await _conflict(user["id"], start, end, did) or await _conflict(d["recipient_id"], start, end, did):
         raise HTTPException(400, "TIME_CONFLICT")
     loc = {"venue": req.venue, "address": req.address or "", "city": req.city or "", "meeting_point": req.meeting_point or "",
@@ -3443,6 +3481,13 @@ async def invite_cancel(did: str, user=Depends(get_current_user)):
         raise HTTPException(400, "LOCKED")
     if d["recipient_id"] == user["id"]:
         await _refund(d, "full_inviter", "CANCELLED")
+        # invited person rejected -> lock that day+time in their availability (permanent)
+        lock_s = (d.get("location") or {}).get("scheduled_start") or d.get("proposed_start")
+        lock_e = (d.get("location") or {}).get("scheduled_end") or d.get("proposed_end")
+        if lock_s:
+            await db.users.update_one({"id": d["recipient_id"]}, {"$push": {"locked_slots": {
+                "date": lock_s[:10], "start": lock_s, "end": lock_e, "reason": "rejected_date",
+                "date_id": did, "locked_at": _iso()}}})
     else:
         await _refund(d, "split", "CANCELLED")
     await _log_status(did, "CANCELLED", user["id"])
