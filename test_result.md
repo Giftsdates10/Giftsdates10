@@ -260,23 +260,95 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ PASSED - Invitee cancellation/decline coin split working correctly. Test results: When invitee declines 400-coin booking: 1) Response shows refunded=400 (100%). 2) Inviter coins increased by 400 (full refund). 3) Target balances unchanged (no penalty). 4) No platform fee or compensation deducted. 100% refund to inviter as specified."
+  
+  - task: "ACTIVE Date Invites - Create Validation (POST /api/invites)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Create invite validation working correctly. Test: POST /api/invites with activity_option_3 blank correctly rejected with 400 'ACTIVITIES_REQUIRED'. All 3 custom activity options are mandatory."
+  
+  - task: "ACTIVE Date Invites - Create Success (POST /api/invites)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Create invite success working correctly. Test: POST /api/invites with activity_option_1='Coffee & a walk in the park', activity_option_2='Cocktails at a rooftop bar', activity_option_3='A round of mini-golf', coins=200, safety_ack=true succeeded. Response returned invite id and status='INVITATION_SENT'."
+  
+  - task: "ACTIVE Date Invites - Options Stored (GET /api/invites)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Options storage working correctly. Test: GET /api/invites as both recipient and inviter returns invite with all 3 custom options. Each option has name (the typed text), idea_id (opt1/opt2/opt3), and order. Fields activity_option_1/2/3 populated with custom text. Fields chosen_idea=null and selected_activity=null before recipient chooses."
+  
+  - task: "ACTIVE Date Invites - Recipient Chooses Activity (POST /api/invites/{id}/choose)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Recipient activity choice working correctly. Test: POST /api/invites/{id}/choose as recipient with idea_id='opt2' succeeded. Status changed to 'DATE_ACTIVITY_SELECTED'. GET /api/invites now shows chosen_idea.name='Cocktails at a rooftop bar' and selected_activity='Cocktails at a rooftop bar'."
+  
+  - task: "ACTIVE Date Invites - Invalid Choice Validation (POST /api/invites/{id}/choose)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Invalid choice validation working correctly. Test 1: Choosing with idea_id='opt9' (not in options) rejected with 400 'Invalid option'. Test 2: Inviter attempting to choose (wrong party) rejected with 403 'Only the recipient can do this'."
+  
+  - task: "ACTIVE Date Invites - Safety Acknowledgment (POST /api/invites)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Safety acknowledgment validation working correctly. Test: Creating invite with safety_ack=false rejected with 400 'SAFETY_ACK_REQUIRED'. Users must acknowledge safety guidelines before creating date invitations."
 
 frontend:
 
 metadata:
   created_by: "testing_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "3 Mandatory Activities (POST /api/dates/book)"
-    - "2.5-Hour Date Slots (POST /api/dates/book)"
-    - "15-Minute Buffer Gap (POST /api/dates/book)"
-    - "Invitee Activity Selection (POST /api/dates/respond/{bid})"
-    - "Cancellation Coin Split - Inviter Cancels (POST /api/dates/cancel/{bid})"
-    - "Cancellation Coin Split - Invitee Cancels (POST /api/dates/respond/{bid})"
+    - "ACTIVE Date Invites - Create Validation (POST /api/invites)"
+    - "ACTIVE Date Invites - Create Success (POST /api/invites)"
+    - "ACTIVE Date Invites - Options Stored (GET /api/invites)"
+    - "ACTIVE Date Invites - Recipient Chooses Activity (POST /api/invites/{id}/choose)"
+    - "ACTIVE Date Invites - Invalid Choice Validation (POST /api/invites/{id}/choose)"
+    - "ACTIVE Date Invites - Safety Acknowledgment (POST /api/invites)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -288,3 +360,5 @@ agent_communication:
       message: "Completed date booking 15-minute buffer testing. All tests PASSED: 1) Registered 3 test users (target + 2 requesters), 2) Set target availability for tomorrow 18:00-23:00, 3) Verified GET /api/profiles/{target_id}/availability returns buffer=15 and slot_hours=3, 4) Requester A successfully booked 18:00-21:00 slot (status=escrow), 5) Requester B correctly rejected at 20:00-23:00 with SLOT_BUSY error (buffer conflict - first booking locks until 21:15), 6) busy_slots correctly shows lock_from=17:45 and lock_to=21:15. The 15-minute auto-lock buffer is working perfectly - prevents double-booking and enforces gaps before/after each date."
     - agent: "testing"
       message: "Completed comprehensive 'Book a Date' feature testing. ALL 6 TEST SCENARIOS PASSED: 1) 3 MANDATORY ACTIVITIES - Bookings without activities or with <3 activities correctly rejected with ACTIVITIES_REQUIRED; booking with exactly 3 activities succeeds and stores them with selected_activity=null. 2) 2.5-HOUR SLOT - Dates are exactly 150 minutes (18:00-20:30); availability endpoint returns slot_hours=2.5 and buffer=15; busy_slots show correct lock times (17:45-20:45). 3) BUFFER GAP - Booking at 20:30 immediately after 18:00-20:30 date correctly rejected with SLOT_BUSY due to 15-min buffer. 4) INVITEE SELECTS ACTIVITY - Accept without selected_activity rejected; accept with invalid activity rejected; accept with valid activity from the 3 options succeeds and saves selection. 5) CANCELLATION SCENARIO A (inviter cancels) - Correct 50/25/25 split: 50% refund to inviter, 25% compensation to invitee, 25% platform fee; coin balances and transactions verified. 6) CANCELLATION SCENARIO B (invitee cancels/declines) - 100% refund to inviter, no penalty, no platform fee; coin balances verified. All backend date booking features working perfectly."
+    - agent: "testing"
+      message: "Completed ACTIVE date-invitation flow testing using /api/invites endpoints. ALL 6 TEST SCENARIOS PASSED: 1) CREATE VALIDATION - POST /api/invites with missing/blank activity options correctly rejected with 400 'ACTIVITIES_REQUIRED'. 2) CREATE SUCCESS - POST /api/invites with 3 custom activities (Coffee & walk, Cocktails at rooftop bar, Mini-golf) succeeded, returned invite id and status='INVITATION_SENT'. 3) OPTIONS STORED - GET /api/invites as both recipient and inviter returns invite with all 3 options correctly stored (options[].name = typed text, idea_id = opt1/opt2/opt3, activity_option_1/2/3 fields populated, chosen_idea=null, selected_activity=null). 4) RECIPIENT CHOOSES - POST /api/invites/{id}/choose with idea_id='opt2' succeeded, status changed to 'DATE_ACTIVITY_SELECTED', chosen_idea.name and selected_activity correctly set to 'Cocktails at a rooftop bar'. 5) INVALID CHOICE - Choosing with invalid idea_id='opt9' rejected with 400 'Invalid option'; inviter attempting to choose rejected with 403 'Only the recipient can do this'. 6) SAFETY ACK - Creating invite with safety_ack=false rejected with 400 'SAFETY_ACK_REQUIRED'. All /api/invites endpoints working perfectly with proper validation."

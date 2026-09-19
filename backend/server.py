@@ -3243,6 +3243,8 @@ def _serialize(d, viewer_id, other_mini):
         pass
     return {"id": d["id"], "role": "inviter" if inv else "recipient", "status": d["status"], "status_label": label,
             "next_step": step, "other": other_mini, "options": d.get("options"), "chosen_idea": d.get("chosen_idea"),
+            "selected_activity": d.get("selected_activity") or (d.get("chosen_idea") or {}).get("name"),
+            "activity_option_1": d.get("activity_option_1"), "activity_option_2": d.get("activity_option_2"), "activity_option_3": d.get("activity_option_3"),
             "coins": d.get("coins"), "total_hold": d.get("total_hold"), "gift": d.get("gift"),
             "location": loc, "transportation": trans, "report": bool(d.get("report")),
             "verification": (d.get("verification") or {}).get("status"), "windows": windows,
@@ -3250,7 +3252,9 @@ def _serialize(d, viewer_id, other_mini):
 
 class InviteCreateReq(BaseModel):
     recipient_id: str
-    idea_ids: list[str]
+    activity_option_1: str
+    activity_option_2: str
+    activity_option_3: str
     coins: int
     gift_id: Optional[str] = None
     safety_ack: bool = False
@@ -3283,15 +3287,14 @@ async def create_invite(req: InviteCreateReq, user=Depends(get_current_user)):
     if not req.safety_ack: raise HTTPException(400, "SAFETY_ACK_REQUIRED")
     rec = await db.users.find_one({"id": req.recipient_id}, {"_id": 0, "id": 1, "name": 1, "date_price": 1})
     if not rec: raise HTTPException(404, "Recipient not found")
-    ids = list(dict.fromkeys([i for i in req.idea_ids if i]))
-    if not 1 <= len(ids) <= 3: raise HTTPException(400, "Select 1 to 3 date ideas")
-    ideas = await db.date_ideas.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(10)
-    if len(ideas) != len(ids): raise HTTPException(400, "Invalid date idea")
+    # 3 mandatory custom date-idea options typed by the inviter (no predefined catalog)
+    opts_text = [(req.activity_option_1 or "").strip(), (req.activity_option_2 or "").strip(), (req.activity_option_3 or "").strip()]
+    if any(not o for o in opts_text): raise HTTPException(400, "ACTIVITIES_REQUIRED")
+    opts_text = [o[:120] for o in opts_text]
     floor = max(INVITE_MIN_COINS, int(rec.get("date_price") or 0))
     if req.coins < floor: raise HTTPException(400, f"MIN_COINS:{floor}")
     if ((user.get("coins") or 0) + (user.get("withdrawable") or 0)) < req.coins: raise HTTPException(400, "Insufficient coins")
-    idea_by = {i["id"]: i["name"] for i in ideas}
-    options = [{"idea_id": i, "name": idea_by[i], "order": n + 1} for n, i in enumerate(ids)]
+    options = [{"idea_id": f"opt{n}", "name": text, "order": n} for n, text in enumerate(opts_text, start=1)]
     await spend_coins(user["id"], req.coins)
     await record_txn(user["id"], "DATE_PAYMENT", -req.coins, None, "Date invitation escrow")
     gift = None
@@ -3305,7 +3308,8 @@ async def create_invite(req: InviteCreateReq, user=Depends(get_current_user)):
             gift = {"id": g["id"], "icon": g.get("icon"), "cost": g["cost"]}
     did = str(uuid.uuid4())
     doc = {"id": did, "inviter_id": user["id"], "recipient_id": req.recipient_id, "options": options,
-           "chosen_idea": None, "coins": req.coins, "total_hold": req.coins, "gift": gift,
+           "activity_option_1": opts_text[0], "activity_option_2": opts_text[1], "activity_option_3": opts_text[2],
+           "chosen_idea": None, "selected_activity": None, "coins": req.coins, "total_hold": req.coins, "gift": gift,
            "location": None, "transportation": None, "status": "INVITATION_SENT",
            "status_log": [{"status": "INVITATION_SENT", "at": _iso(), "by": user["id"]}], "report": None,
            "verification": None, "paid_out": False, "refunded": False, "reminders": {},
@@ -3330,7 +3334,7 @@ async def invite_choose(did: str, req: ChooseIdeaReq, user=Depends(get_current_u
     if d["status"] != "INVITATION_SENT": raise HTTPException(400, "Cannot choose now")
     opt = next((o for o in d["options"] if o["idea_id"] == req.idea_id), None)
     if not opt: raise HTTPException(400, "Invalid option")
-    await db.dates.update_one({"id": did}, {"$set": {"chosen_idea": {"idea_id": opt["idea_id"], "name": opt["name"]}}})
+    await db.dates.update_one({"id": did}, {"$set": {"chosen_idea": {"idea_id": opt["idea_id"], "name": opt["name"]}, "selected_activity": opt["name"]}})
     await _log_status(did, "DATE_ACTIVITY_SELECTED", user["id"])
     await notify(d["inviter_id"], "date_accepted", "Your date invitation was accepted",
                  f"{user['name']} chose: {opt['name']}. Now propose a meeting location.", {"date_id": did}, email=True, link=DATES_LINK, cta="View Date")
