@@ -20,6 +20,7 @@ export default function Dates() {
   const [taxiFor, setTaxiFor] = useState(null); // { id, coins }
   const [meetFor, setMeetFor] = useState(null);
   const [meetLoc, setMeetLoc] = useState({});
+  const [chosenActivity, setChosenActivity] = useState({}); // { bookingId: activityText }
   const inputRef = useRef();
   const uploadingFor = useRef(null);
 
@@ -41,7 +42,16 @@ export default function Dates() {
     finally { setBusyId(null); }
   };
 
-  const respond = async (id, accept) => {
+  const respond = async (id, accept, activities) => {
+    if (accept && activities && activities.length) {
+      const chosen = chosenActivity[id];
+      if (!chosen) { toast.error(t("select_activity_err", lang)); return; }
+      setBusyId(id);
+      try { await api.post(`/dates/respond/${id}?accept=true&selected_activity=${encodeURIComponent(chosen)}`); await refreshUser(); await load(); toast.success(t("date_accepted_toast", lang)); }
+      catch (e) { const d = e.response?.data?.detail; toast.error(d === "SELECT_ACTIVITY" ? t("select_activity_err", lang) : d || t("failed", lang)); }
+      finally { setBusyId(null); }
+      return;
+    }
     setBusyId(id);
     try { await api.post(`/dates/respond/${id}?accept=${accept}`); await refreshUser(); await load(); toast.success(t(accept ? "date_accepted_toast" : "date_declined_toast", lang)); }
     catch (e) { toast.error(e.response?.data?.detail || t("failed", lang)); }
@@ -168,11 +178,43 @@ export default function Dates() {
             )}
           </div>
         )}
+        {Array.isArray(b.activities) && b.activities.length > 0 && (
+          <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-2.5" data-testid={`date-activities-${b.id}`}>
+            {b.selected_activity ? (
+              <div className="text-xs text-violet-200 flex items-center gap-1.5">
+                <CalendarHeart size={12} /> {t("chosen_idea", lang)}: <b className="text-white">{b.selected_activity}</b>
+              </div>
+            ) : isIncoming && b.status === "escrow" ? (
+              <div>
+                <div className="text-[11px] text-violet-200 mb-1.5">{t("choose_date_idea", lang)}</div>
+                <div className="space-y-1.5">
+                  {b.activities.map((a, i) => {
+                    const active = chosenActivity[b.id] === a;
+                    return (
+                      <button key={i} type="button" data-testid={`date-activity-choice-${b.id}-${i}`}
+                        onClick={() => setChosenActivity(m => ({ ...m, [b.id]: a }))}
+                        className={`w-full text-start text-xs px-2.5 py-1.5 rounded-md border transition-colors ${active ? "bg-violet-500 border-violet-500 text-white" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}>
+                        {a}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-[11px] text-slate-400 mb-1">{t("date_ideas_label", lang)}</div>
+                <ul className="text-xs text-slate-300 list-disc ms-4 space-y-0.5">
+                  {b.activities.map((a, i) => <li key={i}>{a}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex gap-2 flex-wrap">
         {isIncoming && b.status === "escrow" && (
           <>
-            <Button data-testid={`date-accept-btn-${b.id}`} disabled={busyId===b.id} onClick={() => respond(b.id, true)} className="bg-emerald-600 hover:bg-emerald-500 text-white border-0"><Check size={14} className="me-1"/> {t("accept", lang)}</Button>
+            <Button data-testid={`date-accept-btn-${b.id}`} disabled={busyId===b.id} onClick={() => respond(b.id, true, b.activities)} className="bg-emerald-600 hover:bg-emerald-500 text-white border-0"><Check size={14} className="me-1"/> {t("accept", lang)}</Button>
             <Button data-testid={`date-decline-btn-${b.id}`} disabled={busyId===b.id} onClick={() => respond(b.id, false)} variant="outline" className="bg-rose-500/10 border-rose-500/40 text-rose-300 hover:bg-rose-500/20"><X size={14} className="me-1"/> {t("decline", lang)}</Button>
           </>
         )}

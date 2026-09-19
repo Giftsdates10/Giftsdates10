@@ -511,6 +511,7 @@ class DateBookingReq(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     place: Optional[str] = None  # VIP: own | your | other
+    activities: Optional[List[str]] = None  # exactly 3 custom date-idea options proposed by the inviter
 
 class DateConfirmReq(BaseModel):
     booking_id: str
@@ -1643,8 +1644,9 @@ async def start_call(req: VideoCallReq, user=Depends(get_current_user)):
     return {"call_id": call_id, "cost": cost, "minutes": req.minutes, "rate": rate}
 
 # ---------- Date bookings with escrow ----------
-DATE_SLOT_HOURS = 3  # every date locks a 3-hour block on the chosen day
-DATE_BUFFER = 15  # minutes locked automatically BEFORE and AFTER each date
+DATE_SLOT_HOURS = 2.5  # each date lasts 2.5 hours
+DATE_SLOT_MINUTES = 150  # 2.5-hour date duration
+DATE_BUFFER = 15  # minutes locked automatically BEFORE and AFTER each date (total block = 150 + 2*15 = 180m)
 
 def _hm_to_min(s):
     try:
@@ -1661,7 +1663,7 @@ def gen_slots(win):
     win = win or {"from": "18:00", "to": "23:00"}
     start = _hm_to_min(win.get("from", "18:00"))
     end = _hm_to_min(win.get("to", "23:00"))
-    step = DATE_SLOT_HOURS * 60
+    step = DATE_SLOT_MINUTES
     slots = []
     s = start
     while s < end:
@@ -1683,7 +1685,7 @@ def _booking_start_min(b):
 def _booking_end_min(b):
     if b.get("slot_to"):
         return _hm_to_min(b["slot_to"])
-    return _booking_start_min(b) + DATE_SLOT_HOURS * 60
+    return _booking_start_min(b) + DATE_SLOT_MINUTES
 
 @api.post("/dates/book")
 async def book_date(req: DateBookingReq, user=Depends(get_current_user)):
@@ -1693,6 +1695,12 @@ async def book_date(req: DateBookingReq, user=Depends(get_current_user)):
     target = await db.users.find_one({"id": req.target_id})
     if not target: raise HTTPException(404, "Recipient not found")
     now = datetime.now(timezone.utc).isoformat()
+    # 3 mandatory custom date-idea options proposed by the inviter
+    activities = [str(a).strip() for a in (req.activities or [])]
+    activities = [a for a in activities if a]
+    if len(activities) != 3:
+        raise HTTPException(400, "ACTIVITIES_REQUIRED")
+    activities = [a[:120] for a in activities]
     day = req.scheduled_at[:10]
     if target.get("availability") and day not in target["availability"]: raise HTTPException(400, "DAY_UNAVAILABLE")
     win = (target.get("availability_slots") or {}).get(day) or target.get("availability_time")
@@ -1702,10 +1710,10 @@ async def book_date(req: DateBookingReq, user=Depends(get_current_user)):
     except Exception:
         local_t = req.local_time or "00:00"
     start_min = _hm_to_min(local_t)
-    end_min = start_min + DATE_SLOT_HOURS * 60
+    end_min = start_min + DATE_SLOT_MINUTES
     slot_from, slot_to = _min_to_hm(start_min), _min_to_hm(end_min)
     if win:
-        # The chosen 3h block must fit inside the availability window
+        # The chosen 2.5h date must fit inside the availability window
         if not (_hm_to_min(win["from"]) <= start_min and end_min <= _hm_to_min(win["to"])):
             raise HTTPException(400, f"TIME_UNAVAILABLE:{win['from']}-{win['to']}")
     # 3-hour slot conflict check + 15-min buffer locked before AND after each date
@@ -1722,6 +1730,7 @@ async def book_date(req: DateBookingReq, user=Depends(get_current_user)):
            "venue": req.venue, "city": req.city, "address": (req.address or "").strip(), "postal_code": (req.postal_code or "").strip(), "country": (req.country or "").strip(), "lat": req.lat, "lng": req.lng, "scheduled_at": req.scheduled_at,
            "local_time": local_t, "slot_from": slot_from, "slot_to": slot_to,
            "coins": req.coins, "status": "escrow", "photo_url": None,
+           "activities": activities, "selected_activity": None,
            "release_at": None, "created_at": now}
     await spend_coins(user["id"], req.coins)
     # hold in escrow of recipient
@@ -1731,13 +1740,22 @@ async def book_date(req: DateBookingReq, user=Depends(get_current_user)):
     return {"booking_id": booking_id, "status": "escrow"}
 
 @api.post("/dates/respond/{bid}")
-async def respond_date(bid: str, accept: bool, user=Depends(get_current_user)):
+async def respond_date(bid: str, accept: bool, selected_activity: Optional[str] = None, user=Depends(get_current_user)):
     b = await db.date_bookings.find_one({"id": bid})
     if not b: raise HTTPException(404, "Not found")
     if b["to_id"] != user["id"]: raise HTTPException(403, "Only recipient can respond")
     if b["status"] != "escrow": raise HTTPException(400, "Cannot respond")
     now = datetime.now(timezone.utc).isoformat()
     if accept:
+        opts = b.get("activities") or []
+        # the invitee must pick one of the inviter's 3 proposed date ideas
+        if opts:
+            chosen = (selected_activity or "").strip()
+            if chosen not in opts:
+                raise HTTPException(400, "SELECT_ACTIVITY")
+            await db.date_bookings.update_one({"id": bid}, {"$set": {"status": "accepted", "accepted_at": now, "selected_activity": chosen}})
+            await notify(b["from_id"], "date_accepted", "Date accepted 💃", f"{user['name']} accepted your date at {b['venue']} and chose: {chosen}.", {"booking_id": bid}, email=True)
+            return {"status": "accepted", "selected_activity": chosen}
         await db.date_bookings.update_one({"id": bid}, {"$set": {"status": "accepted", "accepted_at": now}})
         await notify(b["from_id"], "date_accepted", "Date accepted 💃", f"{user['name']} accepted your date at {b['venue']}.", {"booking_id": bid}, email=True)
         return {"status": "accepted"}
@@ -1860,17 +1878,20 @@ async def cancel_date(bid: str, user=Depends(get_current_user)):
         if sched.tzinfo is None: sched = sched.replace(tzinfo=timezone.utc)
         now_dt = datetime.now(timezone.utc)
         if sched <= now_dt < sched + timedelta(hours=24): raise HTTPException(400, "CANCEL_LOCKED_24H")
-        # inviter cancels -> 50% of (booking + taxi) back to inviter, the rest compensates the invited person
-        pct = (await get_settings()).get("cancel_refund_pct", CANCEL_REFUND_PCT)
-        refund = int(round(base * pct)); kept = base - refund
+        # inviter cancels -> forfeits 50%: 50% refunded to inviter, 25% to invitee, 25% to platform
+        refund = int(round(base * 0.5))          # back to the inviter
+        invitee_comp = int(round(base * 0.25))    # compensation to the invited person
+        platform_fee = base - refund - invitee_comp  # ~25% retained by the platform
         await db.users.update_one({"id": b["from_id"]}, {"$inc": {"coins": refund}})
-        await db.users.update_one({"id": b["to_id"]}, {"$inc": {"escrow": -b["coins"], "withdrawable": kept - tcoins}})
-        await db.date_bookings.update_one({"id": bid}, {"$set": {"status": "cancelled", "refund": refund, "compensation": kept, "cancelled_at": now, "cancelled_by": "inviter", **taxi_set}})
-        if kept:
-            await db.transactions.insert_one({"id": str(uuid.uuid4()), "type": "date_cancel_fee", "from_id": b["from_id"], "to_id": b["to_id"], "cost": kept, "net": kept, "created_at": now})
+        await db.users.update_one({"id": b["to_id"]}, {"$inc": {"escrow": -b["coins"], "withdrawable": invitee_comp - tcoins}})
+        await db.date_bookings.update_one({"id": bid}, {"$set": {"status": "cancelled", "refund": refund, "compensation": invitee_comp, "platform_fee": platform_fee, "cancelled_at": now, "cancelled_by": "inviter", **taxi_set}})
+        if invitee_comp:
+            await db.transactions.insert_one({"id": str(uuid.uuid4()), "type": "date_cancel_fee", "from_id": b["from_id"], "to_id": b["to_id"], "cost": invitee_comp, "net": invitee_comp, "created_at": now})
+        if platform_fee:
+            await db.transactions.insert_one({"id": str(uuid.uuid4()), "type": "date_cancel_platform_fee", "from_id": b["from_id"], "to_id": "platform", "cost": platform_fee, "net": platform_fee, "created_at": now})
         for uid in (b["from_id"], b["to_id"]):
-            await notify(uid, "date_cancelled", "Date cancelled", f"The date at {b['venue']} was cancelled by the inviter. 50% (🪙 {refund}) refunded to the inviter; 🪙 {kept} kept by the invited person.", {"booking_id": bid}, email=True)
-        return {"status": "cancelled", "refund": refund, "compensation": kept}
+            await notify(uid, "date_cancelled", "Date cancelled", f"The date at {b['venue']} was cancelled by the inviter. 🪙 {refund} refunded to the inviter, 🪙 {invitee_comp} to the invited person, 🪙 {platform_fee} platform fee.", {"booking_id": bid}, email=True)
+        return {"status": "cancelled", "refund": refund, "compensation": invitee_comp, "platform_fee": platform_fee}
     # invited person cancels -> full refund to the inviter
     await db.users.update_one({"id": b["from_id"]}, {"$inc": {"coins": base}})
     await db.users.update_one({"id": b["to_id"]}, {"$inc": {"escrow": -b["coins"], "withdrawable": -tcoins}})

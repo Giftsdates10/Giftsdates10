@@ -188,20 +188,95 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ PASSED - Availability endpoint working correctly. Returns available_days, time_window, busy_slots with lock_from/lock_to times, slot_hours=3, and buffer=15. Correctly calculates busy slots based on existing bookings with buffer applied."
+  
+  - task: "3 Mandatory Activities (POST /api/dates/book)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - 3 mandatory activities requirement working correctly. Test results: 1) Booking WITHOUT activities field rejected with 400 ACTIVITIES_REQUIRED. 2) Booking with only 2 activities rejected with 400 ACTIVITIES_REQUIRED. 3) Booking with exactly 3 activities succeeded with status=escrow. 4) GET /api/dates confirmed booking has 3 activities stored and selected_activity=null. All validation working as expected."
+  
+  - task: "2.5-Hour Date Slots (POST /api/dates/book)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - 2.5-hour (150-minute) date slots working correctly. Test results: 1) Booking at 18:00 correctly created slot_from=18:00 and slot_to=20:30. 2) GET /api/profiles/{target}/availability returns slot_hours=2.5 and buffer=15. 3) busy_slots correctly shows 18:00-20:30 with lock_from=17:45 and lock_to=20:45. Date duration is exactly 2.5 hours as specified."
+  
+  - task: "15-Minute Buffer Gap (POST /api/dates/book)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - 15-minute buffer gap working correctly. Test results: With first booking at 18:00-20:30 (lock until 20:45), second booking attempt at 20:30 correctly rejected with 400 SLOT_BUSY. Buffer prevents back-to-back bookings and enforces 15-minute gap after each date ends."
+  
+  - task: "Invitee Activity Selection (POST /api/dates/respond/{bid})"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Invitee activity selection on accept working correctly. Test results: 1) Accept WITHOUT selected_activity rejected with 400 SELECT_ACTIVITY. 2) Accept with activity NOT in the 3 options rejected with 400 SELECT_ACTIVITY. 3) Accept with valid activity from the 3 options succeeded with status=accepted and selected_activity saved. Validation ensures invitee must choose one of the inviter's 3 proposed activities."
+  
+  - task: "Cancellation Coin Split - Inviter Cancels (POST /api/dates/cancel/{bid})"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Inviter cancellation coin split working correctly. Test results: When inviter cancels 400-coin booking: 1) Response shows refund=200 (50%), compensation=100 (25%), platform_fee=100 (25%). 2) Inviter coins increased by 200. 3) Target withdrawable increased by 100. 4) Transactions collection has 'date_cancel_fee' and 'date_cancel_platform_fee' entries. Coin split is exactly 50/25/25 as specified."
+  
+  - task: "Cancellation Coin Split - Invitee Cancels (POST /api/dates/respond/{bid})"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Invitee cancellation/decline coin split working correctly. Test results: When invitee declines 400-coin booking: 1) Response shows refunded=400 (100%). 2) Inviter coins increased by 400 (full refund). 3) Target balances unchanged (no penalty). 4) No platform fee or compensation deducted. 100% refund to inviter as specified."
 
 frontend:
 
 metadata:
   created_by: "testing_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Date Booking 15-Minute Buffer (POST /api/dates/book)"
-    - "Profile Availability Management (PATCH /api/auth/me)"
-    - "Availability Retrieval (GET /api/profiles/{pid}/availability)"
+    - "3 Mandatory Activities (POST /api/dates/book)"
+    - "2.5-Hour Date Slots (POST /api/dates/book)"
+    - "15-Minute Buffer Gap (POST /api/dates/book)"
+    - "Invitee Activity Selection (POST /api/dates/respond/{bid})"
+    - "Cancellation Coin Split - Inviter Cancels (POST /api/dates/cancel/{bid})"
+    - "Cancellation Coin Split - Invitee Cancels (POST /api/dates/respond/{bid})"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -211,3 +286,5 @@ agent_communication:
       message: "Completed auth flow testing as requested. All 4 auth endpoints tested and working: 1) POST /api/auth/register creates users successfully, 2) POST /api/auth/login returns valid JWT tokens, 3) GET /api/auth/me validates tokens and returns user data, 4) Login persistence confirmed in MongoDB. Backend auth flow is fully functional. Stripe and email flows were not tested as requested (keys intentionally not set)."
     - agent: "testing"
       message: "Completed date booking 15-minute buffer testing. All tests PASSED: 1) Registered 3 test users (target + 2 requesters), 2) Set target availability for tomorrow 18:00-23:00, 3) Verified GET /api/profiles/{target_id}/availability returns buffer=15 and slot_hours=3, 4) Requester A successfully booked 18:00-21:00 slot (status=escrow), 5) Requester B correctly rejected at 20:00-23:00 with SLOT_BUSY error (buffer conflict - first booking locks until 21:15), 6) busy_slots correctly shows lock_from=17:45 and lock_to=21:15. The 15-minute auto-lock buffer is working perfectly - prevents double-booking and enforces gaps before/after each date."
+    - agent: "testing"
+      message: "Completed comprehensive 'Book a Date' feature testing. ALL 6 TEST SCENARIOS PASSED: 1) 3 MANDATORY ACTIVITIES - Bookings without activities or with <3 activities correctly rejected with ACTIVITIES_REQUIRED; booking with exactly 3 activities succeeds and stores them with selected_activity=null. 2) 2.5-HOUR SLOT - Dates are exactly 150 minutes (18:00-20:30); availability endpoint returns slot_hours=2.5 and buffer=15; busy_slots show correct lock times (17:45-20:45). 3) BUFFER GAP - Booking at 20:30 immediately after 18:00-20:30 date correctly rejected with SLOT_BUSY due to 15-min buffer. 4) INVITEE SELECTS ACTIVITY - Accept without selected_activity rejected; accept with invalid activity rejected; accept with valid activity from the 3 options succeeds and saves selection. 5) CANCELLATION SCENARIO A (inviter cancels) - Correct 50/25/25 split: 50% refund to inviter, 25% compensation to invitee, 25% platform fee; coin balances and transactions verified. 6) CANCELLATION SCENARIO B (invitee cancels/declines) - 100% refund to inviter, no penalty, no platform fee; coin balances verified. All backend date booking features working perfectly."

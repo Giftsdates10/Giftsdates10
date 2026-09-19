@@ -14,7 +14,7 @@ const hmMin = (s) => { const [h, m] = String(s || "0:0").split(":").map(Number);
 const minHm = (x) => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
 export const genSlots = (w) => {
   const start = hmMin(w?.from || "18:00"), end = hmMin(w?.to || "23:00");
-  const out = []; for (let s = start; s < end; s += 180) out.push({ from: minHm(s), to: minHm(Math.min(s + 180, end)) });
+  const out = []; for (let s = start; s + 150 <= end; s += 150) out.push({ from: minHm(s), to: minHm(s + 150) });
   return out;
 };
 

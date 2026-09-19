@@ -19,11 +19,12 @@ export default function DateBookingModal({ open, onOpenChange, target }) {
   const [day, setDay] = useState(null);
   const [time, setTime] = useState("19:00");
   const [coins, setCoins] = useState(target?.date_price || meta?.date_min_coins || 300);
+  const [activities, setActivities] = useState(["", "", ""]);
   const [avail, setAvail] = useState({ available_days: [], busy_days: [] });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setCity(target?.city || ""); setLoc({ address: "", postal_code: "", country: target?.country || "", lat: null, lng: null }); setCoins(target?.date_price || meta?.date_min_coins || 300); setDay(null);
+    setCity(target?.city || ""); setLoc({ address: "", postal_code: "", country: target?.country || "", lat: null, lng: null }); setCoins(target?.date_price || meta?.date_min_coins || 300); setDay(null); setActivities(["", "", ""]);
     if (open && target?.id) api.get(`/profiles/${target.id}/availability`).then(r => setAvail(r.data)).catch(() => {});
   }, [target, meta, open]);
 
@@ -35,7 +36,7 @@ export default function DateBookingModal({ open, onOpenChange, target }) {
   const minHm = (x) => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
   const genSlots = (w) => {
     const start = hmMin(w?.from || "18:00"), end = hmMin(w?.to || "23:00");
-    const out = []; for (let s = start; s < end; s += 180) out.push({ from: minHm(s), to: minHm(Math.min(s + 180, end)) });
+    const out = []; for (let s = start; s + 150 <= end; s += 150) out.push({ from: minHm(s), to: minHm(s + 150) });
     return out;
   };
   const daySlots = day ? genSlots(win) : [];
@@ -60,12 +61,14 @@ export default function DateBookingModal({ open, onOpenChange, target }) {
 
   const submit = async () => {
     if (!venue || !day) { toast.error(t("fill_all", lang)); return; }
+    const acts = activities.map(a => a.trim());
+    if (acts.some(a => !a)) { toast.error(t("activities_required_err", lang)); return; }
     if (user.coins < coins) { toast.error(t("not_enough_coins", lang)); return; }
     setBusy(true);
     try {
       const [h, m] = time.split(":").map(Number);
       const dt = fromKey(day); dt.setHours(h || 0, m || 0, 0, 0);
-      await api.post("/dates/book", { target_id: target.id, venue, city, scheduled_at: dt.toISOString(), coins, local_time: time, address: loc.address, postal_code: loc.postal_code, country: loc.country, lat: loc.lat, lng: loc.lng });
+      await api.post("/dates/book", { target_id: target.id, venue, city, scheduled_at: dt.toISOString(), coins, local_time: time, address: loc.address, postal_code: loc.postal_code, country: loc.country, lat: loc.lat, lng: loc.lng, activities: acts });
       await refreshUser();
       toast.success(t("date_booked", lang));
       onOpenChange(false);
@@ -73,6 +76,7 @@ export default function DateBookingModal({ open, onOpenChange, target }) {
       const d = e.response?.data?.detail || "";
       toast.error(
         d === "DAY_UNAVAILABLE" ? t("day_unavailable_err", lang)
+        : d === "ACTIVITIES_REQUIRED" ? t("activities_required_err", lang)
         : d === "DAY_BUSY" ? t("day_busy_err", lang)
         : d.startsWith("SLOT_BUSY:") ? t("slot_busy_err", lang).replace("{w}", d.split(":").slice(1).join(":"))
         : d.startsWith("TIME_UNAVAILABLE:") ? t("time_unavailable_err", lang).replace("{w}", d.split(":").slice(1).join(":"))
@@ -146,11 +150,23 @@ export default function DateBookingModal({ open, onOpenChange, target }) {
                 </div>
               )}
             </div>
+            <div data-testid="date-activities">
+              <Label className="text-xs text-slate-400">{t("date_ideas_label", lang)}</Label>
+              <p className="text-[11px] text-slate-500 mt-0.5">{t("date_ideas_hint", lang)}</p>
+              <div className="space-y-2 mt-1.5">
+                {[0, 1, 2].map(i => (
+                  <Input key={i} data-testid={`date-activity-${i}`} value={activities[i]}
+                    onChange={e => setActivities(a => a.map((v, idx) => idx === i ? e.target.value : v))}
+                    placeholder={t(`date_idea_ph_${i}`, lang)} maxLength={120}
+                    className="bg-white/5 border-white/10" />
+                ))}
+              </div>
+            </div>
             <div><Label className="text-xs text-slate-400">{t("coins", lang)} (min {meta?.date_min_coins})</Label>
               <p className="text-[11px] text-slate-500 mt-0.5" data-testid="date-price-note">{t("date_price_note", lang)}</p>
               <Input data-testid="date-coins-input" type="number" min={meta?.date_min_coins || 300} step="50" value={coins} onChange={e => setCoins(parseInt(e.target.value || 0))} className="bg-white/5 border-white/10 mt-1" /></div>
             <div className="text-xs text-slate-400 glass rounded-lg p-3">🔒 {t("commission_note", lang)}</div>
-            <Button data-testid="date-booking-submit-button" disabled={busy || !day || !timeOk} onClick={submit} className="rose-btn text-white border-0 w-full h-11">
+            <Button data-testid="date-booking-submit-button" disabled={busy || !day || !timeOk || activities.some(a => !a.trim())} onClick={submit} className="rose-btn text-white border-0 w-full h-11">
               {t("book_date", lang)} · 🪙 {coins}
             </Button>
           </div>
