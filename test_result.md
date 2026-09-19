@@ -332,23 +332,30 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ PASSED - Safety acknowledgment validation working correctly. Test: Creating invite with safety_ack=false rejected with 400 'SAFETY_ACK_REQUIRED'. Users must acknowledge safety guidelines before creating date invitations."
+  
+  - task: "Automatic Date Reminders (_date_lifecycle_loop)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ PASSED - Automatic date reminders working correctly. Test results: 1) Inserted fake confirmed date with scheduled_start 20 minutes from now (m30 window active). 2) After 75 seconds, the _date_lifecycle_loop ran and set reminders.m30=True in the date document. 3) Both inviter and recipient received date_reminder notifications with type='date_reminder', title='Your date starts in 30 minutes', body='Cancellation and date coin actions are now locked.', and data.date_id matching the test date. 4) After another 65 seconds, no duplicate reminders were sent (flag prevents re-send). The internal background loop runs every 60 seconds and correctly sends reminders to BOTH parties at the appropriate time windows (24h, 3h, 1h, 30m, start, end). Each reminder flag fires only once per date."
 
 frontend:
 
 metadata:
   created_by: "testing_agent"
   version: "1.0"
-  test_sequence: 4
+  test_sequence: 5
   run_ui: false
 
 test_plan:
   current_focus:
-    - "ACTIVE Date Invites - Create Validation (POST /api/invites)"
-    - "ACTIVE Date Invites - Create Success (POST /api/invites)"
-    - "ACTIVE Date Invites - Options Stored (GET /api/invites)"
-    - "ACTIVE Date Invites - Recipient Chooses Activity (POST /api/invites/{id}/choose)"
-    - "ACTIVE Date Invites - Invalid Choice Validation (POST /api/invites/{id}/choose)"
-    - "ACTIVE Date Invites - Safety Acknowledgment (POST /api/invites)"
+    - "Automatic Date Reminders (_date_lifecycle_loop)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -362,3 +369,5 @@ agent_communication:
       message: "Completed comprehensive 'Book a Date' feature testing. ALL 6 TEST SCENARIOS PASSED: 1) 3 MANDATORY ACTIVITIES - Bookings without activities or with <3 activities correctly rejected with ACTIVITIES_REQUIRED; booking with exactly 3 activities succeeds and stores them with selected_activity=null. 2) 2.5-HOUR SLOT - Dates are exactly 150 minutes (18:00-20:30); availability endpoint returns slot_hours=2.5 and buffer=15; busy_slots show correct lock times (17:45-20:45). 3) BUFFER GAP - Booking at 20:30 immediately after 18:00-20:30 date correctly rejected with SLOT_BUSY due to 15-min buffer. 4) INVITEE SELECTS ACTIVITY - Accept without selected_activity rejected; accept with invalid activity rejected; accept with valid activity from the 3 options succeeds and saves selection. 5) CANCELLATION SCENARIO A (inviter cancels) - Correct 50/25/25 split: 50% refund to inviter, 25% compensation to invitee, 25% platform fee; coin balances and transactions verified. 6) CANCELLATION SCENARIO B (invitee cancels/declines) - 100% refund to inviter, no penalty, no platform fee; coin balances verified. All backend date booking features working perfectly."
     - agent: "testing"
       message: "Completed ACTIVE date-invitation flow testing using /api/invites endpoints. ALL 6 TEST SCENARIOS PASSED: 1) CREATE VALIDATION - POST /api/invites with missing/blank activity options correctly rejected with 400 'ACTIVITIES_REQUIRED'. 2) CREATE SUCCESS - POST /api/invites with 3 custom activities (Coffee & walk, Cocktails at rooftop bar, Mini-golf) succeeded, returned invite id and status='INVITATION_SENT'. 3) OPTIONS STORED - GET /api/invites as both recipient and inviter returns invite with all 3 options correctly stored (options[].name = typed text, idea_id = opt1/opt2/opt3, activity_option_1/2/3 fields populated, chosen_idea=null, selected_activity=null). 4) RECIPIENT CHOOSES - POST /api/invites/{id}/choose with idea_id='opt2' succeeded, status changed to 'DATE_ACTIVITY_SELECTED', chosen_idea.name and selected_activity correctly set to 'Cocktails at a rooftop bar'. 5) INVALID CHOICE - Choosing with invalid idea_id='opt9' rejected with 400 'Invalid option'; inviter attempting to choose rejected with 403 'Only the recipient can do this'. 6) SAFETY ACK - Creating invite with safety_ack=false rejected with 400 'SAFETY_ACK_REQUIRED'. All /api/invites endpoints working perfectly with proper validation."
+    - agent: "testing"
+      message: "Completed automatic date reminders testing. TEST PASSED: 1) Registered two test users (inviter and recipient). 2) Inserted fake confirmed date with status='DATE_CONFIRMED' and scheduled_start 20 minutes from now (m30 window active). 3) Waited 75 seconds for _date_lifecycle_loop to run. 4) Verified reminders.m30=True in date document. 5) Verified both inviter and recipient received date_reminder notifications with correct title ('Your date starts in 30 minutes'), body, and date_id. 6) Waited another 65 seconds and confirmed no duplicate reminders were sent (flag prevents re-send). The internal background loop runs every 60 seconds and correctly sends reminders to BOTH parties at appropriate time windows (24h, 3h, 1h, 30m, start, end). Each reminder flag fires only once per date. All date reminder functionality working perfectly."

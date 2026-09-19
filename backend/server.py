@@ -601,6 +601,7 @@ async def _startup():
         await db.date_ideas.update_one({"id": idea["id"]}, {"$setOnInsert": idea}, upsert=True)
     import asyncio
     asyncio.create_task(_vs_reminder_loop())
+    asyncio.create_task(_date_lifecycle_loop())
     logging.info("GiftsDates backend ready")
 
 # ---------- Meta ----------
@@ -3645,6 +3646,18 @@ async def _run_lifecycle():
         elif now >= start + timedelta(hours=3): await snd("h3", "Your scheduled date window has ended", "Photo confirmation unlocks 24h after the start.")
         if now > start + timedelta(hours=72) and not d.get("report") and not (d.get("verification") or {}).get("status") == "pending" and not d.get("paid_out"):
             await _complete(d, "COMPLETED_AUTO")
+
+async def _date_lifecycle_loop():
+    """Internal background loop: fires date reminders to both parties for confirmed
+    dates (24h/3h/1h/30m/start/end) and auto-completes finished dates. Runs every 60s."""
+    import asyncio
+    await asyncio.sleep(20)
+    while True:
+        try:
+            await _run_lifecycle()
+        except Exception as ex:
+            logging.error(f"date-lifecycle loop error: {ex}")
+        await asyncio.sleep(60)
 
 async def _run_spin_reminders():
     now = _now(); month = now.strftime("%Y-%m")

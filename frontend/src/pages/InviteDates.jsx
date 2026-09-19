@@ -168,10 +168,18 @@ function DateCard({ d, reload }) {
       <div className="mt-3 flex flex-wrap gap-2">
         {d.status === "INVITATION_SENT" && !isInv && (
           <div className="w-full space-y-2" data-testid={`date-choose-${d.id}`}>
+            <div className="text-[11px] text-slate-400">{tr("id_choose_or_reject")}</div>
             <div className="flex flex-wrap gap-2">{d.options.map(o => (
               <button key={o.idea_id} data-testid={`date-choose-opt-${o.idea_id}`} onClick={() => setChoose(o.idea_id)}
                 className={`text-xs px-3 py-1.5 rounded-full border ${choose === o.idea_id ? "bg-rose-500/20 border-rose-500/50 text-rose-200" : "bg-white/5 border-white/10 text-slate-300"}`}>{o.name}</button>))}</div>
-            <Button data-testid={`date-choose-confirm-${d.id}`} disabled={busy || !choose} onClick={() => act(() => post("/choose", { idea_id: choose }))} className="rose-btn text-white border-0 h-9">{tr("id_confirm_choice")}</Button>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button data-testid={`date-choose-confirm-${d.id}`} disabled={busy || !choose} onClick={() => act(() => post("/choose", { idea_id: choose }))} className="rose-btn text-white border-0 h-9"><Check size={14} className="me-1" />{tr("id_confirm_choice")}</Button>
+              <Button data-testid={`date-reject-${d.id}`} disabled={busy} onClick={() => { if (window.confirm(tr("id_reject_confirm"))) act(() => post("/cancel")); }} variant="outline" className="h-9 bg-rose-500/10 border-rose-500/40 text-rose-300 hover:bg-rose-500/20"><X size={14} className="me-1" />{tr("id_reject")}</Button>
+            </div>
+            <div className="flex items-start gap-1.5 text-[11px] text-amber-200/90 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2" data-testid={`date-reject-warning-${d.id}`}>
+              <ShieldAlert size={13} className="mt-0.5 shrink-0 text-amber-300" />
+              <span>{tr("id_reject_warning").replace("{coins}", d.total_hold || d.coins)}</span>
+            </div>
           </div>
         )}
         {d.status === "DATE_ACTIVITY_SELECTED" && isInv && (
@@ -225,7 +233,7 @@ function DateCard({ d, reload }) {
             <Button data-testid={`date-pay-taxi-instead-${d.id}`} disabled={busy} onClick={() => act(() => post("/taxi/confirm"))} variant="outline" className="h-9 bg-white/5 border-white/15">{tr("id_pay_taxi_instead")}</Button>
           </div>
         )}
-        {!TERMINAL.includes(d.status) && d.status !== "PHOTO_VERIFICATION_PENDING" && (
+        {!TERMINAL.includes(d.status) && d.status !== "PHOTO_VERIFICATION_PENDING" && !(d.status === "INVITATION_SENT" && !isInv) && (
           <Button data-testid={`date-cancel-${d.id}`} disabled={busy} onClick={() => act(() => post("/cancel"))} variant="ghost" className="h-9 text-slate-400 hover:text-rose-300">{tr("id_cancel")}</Button>
         )}
         {reportOpen && <Button data-testid={`date-report-${d.id}`} onClick={() => setShowReport(v => !v)} variant="outline" className="h-9 bg-rose-500/10 border-rose-500/40 text-rose-300"><Flag size={14} className="me-1" />{tr("id_report_this")}</Button>}
